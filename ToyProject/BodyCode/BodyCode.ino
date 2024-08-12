@@ -497,10 +497,10 @@ void purpleAction(){
 
 void setMotorSpeed(int speed) {
   if (speed == 0) {
-    digitalWrite(FanMotorPin1, LOW);
-    digitalWrite(FanMotorPin2, LOW);
+    analogWrite(FanMotorPin1, LOW);
+    analogWrite(FanMotorPin2, LOW);
   } else {
     analogWrite(FanMotorPin1, speed);
-    digitalWrite(FanMotorPin2, LOW);
+    analogWrite(FanMotorPin2, LOW);
   }
 }
