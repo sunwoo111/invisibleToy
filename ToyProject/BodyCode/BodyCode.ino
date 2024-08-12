@@ -1,285 +1,426 @@
 
+/**************************************************************************/
+/*!
+    @file     readMifare.pde
+    @author   Adafruit Industries
+  @license  BSD (see license.txt)
 
-/**
- * ----------------------------------------------------------------------------
- * This is a MFRC522 library example; see https://github.com/miguelbalboa/rfid
- * for further details and other examples.
- *
- * NOTE: The library file MFRC522.h has a lot of useful info. Please read it.
- *
- * Released into the public domain.
- * ----------------------------------------------------------------------------
- * This sample shows how to read and write data blocks on a MIFARE Classic PICC
- * (= card/tag).
- *
- * BEWARE: Data will be written to the PICC, in sector #1 (blocks #4 to #7).
- *
- *
- * Typical pin layout used:
- * -----------------------------------------------------------------------------------------
- *             MFRC522      Arduino       Arduino   Arduino    Arduino          Arduino
- *             Reader/PCD   Uno/101       Mega      Nano v3    Leonardo/Micro   Pro Micro
- * Signal      Pin          Pin           Pin       Pin        Pin              Pin
- * -----------------------------------------------------------------------------------------
- * RST/Reset   RST          9             5         D9         RESET/ICSP-5     RST
- * SPI SS      SDA(SS)      10            53        D10        10               10
- * SPI MOSI    MOSI         11 / ICSP-4   51        D11        ICSP-4           16
- * SPI MISO    MISO         12 / ICSP-1   50        D12        ICSP-1           14
- * SPI SCK     SCK          13 / ICSP-3   52        D13        ICSP-3           15
- *
- * More pin layouts for other boards can be found here: https://github.com/miguelbalboa/rfid#pin-layout
- *
- */
-#include <VibrationMotor.h>
+    This example will wait for any ISO14443A card or tag, and
+    depending on the size of the UID will attempt to read from it.
+
+    If the card has a 4-byte UID it is probably a Mifare
+    Classic card, and the following steps are taken:
+
+    - Authenticate block 4 (the first block of Sector 1) using
+      the default KEYA of 0XFF 0XFF 0XFF 0XFF 0XFF 0XFF
+    - If authentication succeeds, we can then read any of the
+      4 blocks in that sector (though only block 4 is read here)
+
+    If the card has a 7-byte UID it is probably a Mifare
+    Ultralight card, and the 4 byte pages can be read directly.
+    Page 4 is read by default since this is the first 'general-
+    purpose' page on the tags.
+
+
+This is an example sketch for the Adafruit PN532 NFC/RFID breakout boards
+This library works with the Adafruit NFC breakout
+  ----> https://www.adafruit.com/products/364
+
+Check out the links above for our tutorials and wiring diagrams
+These chips use SPI or I2C to communicate.
+
+Adafruit invests time and resources providing this open source code,
+please support Adafruit and open-source hardware by purchasing
+products from Adafruit!
+
+*/
+/**************************************************************************/
+#include <Wire.h>
 #include <SPI.h>
-#include <MFRC522.h>
-#define motorPin        5
-#define RST_PIN         9           // Configurable, see typical pin layout above
-#define SS_PIN          10          // Configurable, see typical pin layout above
-#define colorBody       3  //red : 1, blue : 2, yellow : 3
+#include <Adafruit_PN532.h>
+#include <VibrationMotor.h>
+#define bodyColor  1    // red : 1, blue = 2, yellow = 3
 
-VibrationMotor motor(motorPin);
-MFRC522 mfrc522(SS_PIN, RST_PIN);   // Create MFRC522 instance.
-MFRC522::MIFARE_Key key;
-int cardColor; //the color of color which is read by the rfid
-              //red : 1, blue : 2, yellow : 3
-/**
- * Initialize.
- */
-void setup() {
-    Serial.begin(9600); // Initialize serial communications with the PC
-    while (!Serial);    // Do nothing if no serial port is opened (added for Arduinos based on ATMEGA32U4)
-    SPI.begin();        // Init SPI bus
-    mfrc522.PCD_Init(); // Init MFRC522 card
+// If using the breakout with SPI, define the pins for SPI communication.
+#define PN532_SCK  (13)
+#define PN532_MOSI (11)
+#define PN532_SS   (10)
+#define PN532_MISO (12)
 
-    // Prepare the key (used both as key A and as key B)
-    // using FFFFFFFFFFFFh which is the default at chip delivery from the factory
-    for (byte i = 0; i < 6; i++) {
-        key.keyByte[i] = 0xFF;
-    }
+#define vibrationMotorPin        6
+#define FanMotorPin1              4
+#define FanMotorPin2             5
 
-    Serial.println(F("Scan a MIFARE Classic PICC to demonstrate read and write."));
-    Serial.print(F("Using key (for A and B):"));
-    dump_byte_array(key.keyByte, MFRC522::MF_KEY_SIZE);
-    Serial.println();
+// If using the breakout or shield with I2C, define just the pins connected
+// to the IRQ and reset lines.  Use the values below (2, 3) for the shield!
+#define PN532_IRQ   (2)
+#define PN532_RESET (3)  // Not connected by default on the NFC Shield
 
-    Serial.println(F("BEWARE: Data will be written to the PICC, in sector #1"));
+String lastTag = "";  
+// Uncomment just _one_ line below depending on how your breakout or shield
+// is connected to the Arduino:
+
+// Use this line for a breakout with a software SPI connection (recommended):
+Adafruit_PN532 nfc(PN532_SCK, PN532_MISO, PN532_MOSI, PN532_SS);
+
+VibrationMotor motor(vibrationMotorPin);
+
+#include "Arduino.h"
+#include "DFRobotDFPlayerMini.h"
+
+#if (defined(ARDUINO_AVR_UNO) || defined(ARDUINO_AVR_NANO) || defined(ESP8266))   
+#include <SoftwareSerial.h>
+SoftwareSerial softSerial(/*rx =*/2, /*tx =*/3); 
+#define FPSerial softSerial
+#else
+#define FPSerial Serial1
+#endif
+
+DFRobotDFPlayerMini myDFPlayer;
+void printDetail(uint8_t type, int value);
+// Use this line for a breakout with a hardware SPI connection.  Note that
+// the PN532 SCK, MOSI, and MISO pins need to be connected to the Arduino's
+// hardware SPI SCK, MOSI, and MISO pins.  On an Arduino Uno these are
+// SCK = 13, MOSI = 11, MISO = 12.  The SS line can be any digital IO pin.
+//Adafruit_PN532 nfc(PN532_SS);
+
+// Or use this line for a breakout or shield with an I2C connection:
+//Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
+
+// Or use hardware Serial:
+//Adafruit_PN532 nfc(PN532_RESET, &Serial1);
+
+
+
+void setup(void) {
+  Serial.begin(9600);
+  while (!Serial) delay(10); // for Leonardo/Micro/Zero
+
+  Serial.println("Hello!");
+
+
+  nfc.begin();
+
+  nfc.setPassiveActivationRetries(0x10);
+  nfc.SAMConfig();
+  uint32_t versiondata = nfc.getFirmwareVersion();
+  if (! versiondata) {
+    Serial.print("Didn't find PN53x board");
+    while (1); // halt
+  }
+  // Got ok data, print it out!
+  Serial.print("Found chip PN5"); Serial.println((versiondata>>24) & 0xFF, HEX);
+  Serial.print("Firmware ver. "); Serial.print((versiondata>>16) & 0xFF, DEC);
+  Serial.print('.'); Serial.println((versiondata>>8) & 0xFF, DEC);
+
+  Serial.println("Waiting for an ISO14443A Card ...");
+
+  #if (defined ESP32)
+  FPSerial.begin(9600, SERIAL_8N1, /*rx =*/D3, /*tx =*/D2);
+#else
+  FPSerial.begin(9600);
+#endif
+
+  if (!myDFPlayer.begin(FPSerial, /*isACK = */true, /*doReset = */true)) {  
+    Serial.println(F("Unable to begin:"));
+    Serial.println(F("1.Please recheck the connection!"));
+    Serial.println(F("2.Please insert the SD card!"));
+   /* while(true){
+      delay(0); 
+    }*/
+  }
+  Serial.println(F("DFPlayer Mini online."));
+
+  myDFPlayer.volume(30);  
+
 }
 
-/**
- * Main loop.
- */
-void loop() {
-    // Reset the loop if no new card present on the sensor/reader. This saves the entire process when idle.
-    if ( ! mfrc522.PICC_IsNewCardPresent())
-        return;
 
-    // Select one of the cards
-    if ( ! mfrc522.PICC_ReadCardSerial())
-        return;
-
-    // Show some details of the PICC (that is: the tag/card)
-    Serial.print(F("Card UID:"));
-    dump_byte_array(mfrc522.uid.uidByte, mfrc522.uid.size);
-    Serial.println();
-    Serial.print(F("PICC type: "));
-    MFRC522::PICC_Type piccType = mfrc522.PICC_GetType(mfrc522.uid.sak);
-    Serial.println(mfrc522.PICC_GetTypeName(piccType));
-
-    // Check for compatibility
-    if (    piccType != MFRC522::PICC_TYPE_MIFARE_MINI
-        &&  piccType != MFRC522::PICC_TYPE_MIFARE_1K
-        &&  piccType != MFRC522::PICC_TYPE_MIFARE_4K) {
-        Serial.println(F("This sample only works with MIFARE Classic cards."));
-        return;
-    }
-
-    // In this sample we use the second sector,
-    // that is: sector #1, covering block #4 up to and including block #7
-    byte sector         = 1;
-    byte blockAddr      = 4;
-    byte redBlcok[]    = {
-        0x0A, 0x11, 0x0B, 0x00, //  1,  2,   3,  4,
-        0x0C, 0x00, 0xff, 0xff, //  5,  6,   7,  8,
+void loop(void) {
+  
+byte redBlock[]    = {
+        0x0A, 0x11, 0x00, 0x00, //  1,  2,   3,  4,
+        0xff, 0xff, 0xff, 0xff, //  5,  6,   7,  8,
         0xff, 0xff, 0xff, 0xff, //  9, 10, 255, 11,
         0xff, 0xff, 0xff, 0xff  // 12, 13, 14, 15
     };
-    byte blueBlcok[]    = {
-        0x0A, 0x00, 0x0B, 0x11, //  1,  2,   3,  4,
-        0x0C, 0x00, 0xff, 0xff, //  5,  6,   7,  8,
+    byte blueBlock[]    = {
+        0x0B, 0x00, 0x11, 0x00, //  1,  2,   3,  4,
+        0xff, 0xff, 0xff, 0xff, //  5,  6,   7,  8,
         0xff, 0xff, 0xff, 0xff, //  9, 10, 255, 11,
         0xff, 0xff, 0xff, 0xff  // 12, 13, 14, 15
     };
-    byte yellowBlcok[]    = {
-        0x0A, 0x00, 0x0B, 0x00, //  1,  2,   3,  4,
-        0x0C, 0x11, 0xff, 0xff, //  5,  6,   7,  8,
+    byte yellowBlock[]    = {
+        0x0C, 0x00, 0x00, 0x11, //  1,  2,   3,  4,
+        0xff, 0xff, 0xff, 0xff, //  5,  6,   7,  8,
         0xff, 0xff, 0xff, 0xff, //  9, 10, 255, 11,
         0xff, 0xff, 0xff, 0xff  // 12, 13, 14, 15
     };
-    byte trailerBlock   = 7;
-    MFRC522::StatusCode status;
-    byte buffer[18];
-    byte size = sizeof(buffer);
 
-    // Authenticate using key A
-    Serial.println(F("Authenticating using key A..."));
-    status = (MFRC522::StatusCode) mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &key, &(mfrc522.uid));
-    if (status != MFRC522::STATUS_OK) {
-        Serial.print(F("PCD_Authenticate() failed: "));
-        Serial.println(mfrc522.GetStatusCodeName(status));
-        return;
+  uint8_t success;
+  uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };  // Buffer to store the returned UID
+  uint8_t uidLength;                        // Length of the UID (4 or 7 bytes depending on ISO14443A card type)
+  
+  String currentTag = "";
+  int isRed = 1; int isYellow = 1; int isBlue = 1;
+  int cardColor = 0;
+
+  // Wait for an ISO14443A type cards (Mifare, etc.).  When one is found
+  // 'uid' will be populated with the UID, and uidLength will indicate
+  // if the uid is 4 bytes (Mifare Classic) or 7 bytes (Mifare Ultralight)
+  success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength);
+  
+  if (success) {
+    // Display some basic information about the card
+    Serial.println("Found an ISO14443A card");
+    Serial.print("  UID Length: ");Serial.print(uidLength, DEC);Serial.println(" bytes");
+    Serial.print("  UID Value: ");
+    nfc.PrintHex(uid, uidLength);
+    Serial.println("");
+
+    for(int i=0; i<uidLength; i++){
+      currentTag += String(uid[i], HEX);
+    }
+    Serial.println(currentTag);
+
+    if(lastTag == currentTag){
+      Serial.print("same tag!");
+      delay(1000);
+      return;
     }
 
-    // Show the whole sector as it currently is
-    Serial.println(F("Current data in sector:"));
-    mfrc522.PICC_DumpMifareClassicSectorToSerial(&(mfrc522.uid), &key, sector);
-    Serial.println();
+    lastTag = currentTag;
 
-    // Read data from the block
-    Serial.print(F("Reading data from block ")); Serial.print(blockAddr);
-    Serial.println(F(" ..."));
-    status = (MFRC522::StatusCode) mfrc522.MIFARE_Read(blockAddr, buffer, &size);
-    if (status != MFRC522::STATUS_OK) {
-        Serial.print(F("MIFARE_Read() failed: "));
-        Serial.println(mfrc522.GetStatusCodeName(status));
-    }
-    Serial.print(F("Data in block ")); Serial.print(blockAddr); Serial.println(F(":"));
-    dump_byte_array(buffer, 16); Serial.println();
-    Serial.println();
+    if (uidLength == 4)
+    {
+      // We probably have a Mifare Classic card ...
+      Serial.println("Seems to be a Mifare Classic card (4 byte UID)");
 
-    // Authenticate using key B
-    Serial.println(F("Authenticating again using key B..."));
-    status = (MFRC522::StatusCode) mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_B, trailerBlock, &key, &(mfrc522.uid));
-    if (status != MFRC522::STATUS_OK) {
-        Serial.print(F("PCD_Authenticate() failed: "));
-        Serial.println(mfrc522.GetStatusCodeName(status));
-        return;
+      // Now we need to try to authenticate it for read/write access
+      // Try with the factory default KeyA: 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF
+      Serial.println("Trying to authenticate block 4 with default KEYA value");
+      uint8_t keya[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+
+    // Start with block 4 (the first block of sector 1) since sector 0
+    // contains the manufacturer data and it's probably better just
+    // to leave it alone unless you know what you're doing
+      success = nfc.mifareclassic_AuthenticateBlock(uid, uidLength, 4, 0, keya);
+
+      if (success)
+      {
+        Serial.println("Sector 1 (Blocks 4..7) has been authenticated");
+        byte data[16];
+
+        // If you want to write something to block 4 to test with, uncomment
+    // the following line and this text should be read back in a minute
+        //memcpy(data, (const uint8_t[]){ 'a', 'd', 'a', 'f', 'r', 'u', 'i', 't', '.', 'c', 'o', 'm', 0, 0, 0, 0 }, sizeof data);
+        // success = nfc.mifareclassic_WriteDataBlock (4, data);
+
+        // Try to read the contents of block 4
+        success = nfc.mifareclassic_ReadDataBlock(4, data);
+
+        if (success)
+        {
+          // Data seems to have been read ... spit it out
+          Serial.println("Reading Block 4:");
+          nfc.PrintHexChar(data, 16);
+         
+          for(int i=0; i< 4; i++){
+            if(redBlock[i] != data[i]){
+              isRed = 0;
+              //Serial.print("it is not same");
+            }
+            if(yellowBlock[i] != data[i]){
+              isYellow = 0;
+              //Serial.print("it is not same");
+            }
+            if(blueBlock[i] != data[i]){
+              isBlue = 0;
+              //Serial.print("it is not same");
+            }
+          }
+          if(isRed && !isBlue && !isYellow){
+            cardColor = 1; //red
+          }
+          else if(!isRed && isBlue && !isYellow ){
+
+            cardColor = 2; //blue
+          }
+          else if(!isRed && !isBlue && isYellow ){
+          
+            cardColor = 3; //yellow
+          }
+          else{
+            Serial.print("it is wrong in bit of color"); 
+          }
+        }
+        else
+        {
+          Serial.println("Ooops ... unable to read the requested block.  Try another key?");
+        }
+      }
+      else
+      {
+        Serial.println("Ooops ... authentication failed: Try another key?");
+      }
     }
 
-    // Write data to the block
-   /* Serial.print(F("Writing data into block ")); Serial.print(blockAddr);
-    Serial.println(F(" ..."));
-    dump_byte_array(redBlcok, 16); Serial.println();
-    status = (MFRC522::StatusCode) mfrc522.MIFARE_Write(blockAddr, redBlcok, 16);
-    if (status != MFRC522::STATUS_OK) {
-        Serial.print(F("MIFARE_Write() failed: "));
-        Serial.println(mfrc522.GetStatusCodeName(status));
-    }
-    Serial.println();
-  */
-    // Read data from the block (again, should now be what we have written)
-    Serial.print(F("Reading data from block ")); Serial.print(blockAddr);
-    Serial.println(F(" ..."));
-    status = (MFRC522::StatusCode) mfrc522.MIFARE_Read(blockAddr, buffer, &size);
-    if (status != MFRC522::STATUS_OK) {
-        Serial.print(F("MIFARE_Read() failed: "));
-        Serial.println(mfrc522.GetStatusCodeName(status));
-    }
-    Serial.print(F("Data in block ")); Serial.print(blockAddr); Serial.println(F(":"));
-    dump_byte_array(buffer, 16); Serial.println();
+    if (uidLength == 7)
+    {
+      // We probably have a Mifare Ultralight card ...
+      Serial.println("Seems to be a Mifare Ultralight tag (7 byte UID)");
 
-    //redbody meets color card
+      // Try to read the first general-purpose user page (#4)
+      Serial.println("Reading page 4");
+      byte data[32];
+      success = nfc.mifareultralight_ReadPage (4, data);
+      if (success)
+      {
+        // Data seems to have been read ... spit it out
+        nfc.PrintHexChar(data, 4);
+        Serial.println("");
+         for(int i=0; i< 4; i++){
+            if(redBlock[i] != data[i]){
+              isRed = 0;
+              //Serial.print("it is not same");
+            }
+            if(yellowBlock[i] != data[i]){
+              isYellow = 0;
+              //Serial.print("it is not same");
+            }
+            if(blueBlock[i] != data[i]){
+              isBlue = 0;
+              //Serial.print("it is not same");
+            }
+          }
+          if(isRed && !isBlue && !isYellow){
+            cardColor = 1; //red
+          }
+          else if(!isRed && isBlue && !isYellow ){
+
+            cardColor = 2; //blue
+          }
+          else if(!isRed && !isBlue && isYellow ){
+          
+            cardColor = 3; //yellow
+          }
+          else{
+            Serial.print("it is wrong in bit of color"); return;
+          }
+        // Wait a bit before reading the card again
+        delay(1000);
+      }
+      else
+      {
+        Serial.println("Ooops ... unable to read the requested page!?");
+      }
+    }
+  }
+  else{
+    Serial.println("not tagging");
+    lastTag = "";
+    delay(1000);
+  }
+
+  Serial.print("the card Color is"); Serial.println(cardColor);
+  // red : 1, blue : 2, yellow : 3
+  // purple = blue + red
+  // green = yellow + blue
+  // orange = red + yellow
+  bool isredAction = ((bodyColor == 1) && (cardColor == 1));
+  bool isblueAction = ((bodyColor == 2) && (cardColor == 2));
+  bool isyellowAction = ((bodyColor == 3) && (cardColor == 3));
+ 
+  bool ispurpleAction = ((bodyColor == 1) && (cardColor == 2)) || ((bodyColor == 2) && (cardColor == 1));
+  bool isgreenAction = ((bodyColor == 2) && (cardColor == 3)) || ((bodyColor == 3) && (cardColor == 2));
+  bool isorangeAction = ((bodyColor == 1) && (cardColor == 3)) || ((bodyColor == 3) && (cardColor == 1));
+  if(isredAction) redAction();
+  else if(isblueAction) blueAction();
+  else if(isyellowAction) yellowAction();
+
+  else if(ispurpleAction) purpleAction();
+  else if(isgreenAction) greenAction();
+  else if(isorangeAction) orangeAction();
+
+  else{
+    Serial.println("we do not know the color?");
     
+  }
 
-    // Check that data in block is what we have written
-    // by counting the number of bytes that are equal
-    Serial.println(F("Checking result..."));
-    byte redcount = 0;
-    byte bluecount = 0;
-    byte yellowcount = 0;
-    for (byte i = 0; i < 16; i++) {
-        // Compare buffer (= what we've read) with redBlcok (= what we've written)
-        if (buffer[i] == redBlcok[i])redcount++;
-        if(buffer[i] == blueBlcok[i])bluecount++;
-        if(buffer[i] == yellowBlcok[i])yellowcount++;
-    }
-    Serial.print(F("Number of bytes that match red, blue ,yellow= ")); 
-    Serial.print(redcount);Serial.print(", ");Serial.print(bluecount);Serial.print(", ");Serial.println(yellowcount);
-    if (redcount == 16) {
-      //red : 1, blue : 2, yellow : 3
-      if(colorBody == 1){
-        Serial.println(F("Success card & body =  :-) red & red"));
-        redAction();
-      }
-      else if (colorBody == 2){
-        Serial.println(F("Success card & body =  :-) red & blue"));
-      purpleAction();
-      }
-      else if (colorBody == 3){
-        Serial.println(F("Success card & body =   :-) red & yellow"));
-      orangeAction();
-      }
-      else {
-        Serial.println(F("Failure, no match :-("));
-        Serial.println(F("  perhaps the write didn't work properly..."));
-    }
-    
-    } else if(bluecount == 16){
-      if(colorBody == 1){
-        Serial.println(F("Success card & body =  :-) blue & red"));
-        purpleAction();
-      }
-      else if (colorBody == 2){
-        Serial.println(F("Success card & body =   :-) blue & blue"));
-      blueAction();
-      }
-      else if (colorBody == 3){
-        Serial.println(F("Success card & body = :-) blue & yellow"));
-      greenAction();
-      }
-      else {
-        Serial.println(F("Failure, no match :-("));
-        Serial.println(F("  perhaps the write didn't work properly..."));
-    }
-      
-    }else if(yellowcount == 16){
-      if(colorBody == 1){
-        Serial.println(F("Success card & body =    :-) yellow & red"));
-        orangeAction();
-      }
-      else if (colorBody == 2){
-        Serial.println(F("Success card & body =  :-) yellow & blue"));
-      greenAction();
-      }
-      else if (colorBody == 3){
-        Serial.println(F("Success card & body =  :-) yellow & yellow"));
-      yellowAction();
-      }
-      else {
-        Serial.println(F("Failure, no match :-("));
-        Serial.println(F("  perhaps the write didn't work properly..."));
-    }
-    }
-    else {
-        Serial.println(F("Failure, no match :-("));
-        Serial.println(F("  perhaps the write didn't work properly..."));
-        
-    }
-    Serial.println();
+  delay(1000);
 
-    // Dump the sector data
-    Serial.println(F("Current data in sector:"));
-    mfrc522.PICC_DumpMifareClassicSectorToSerial(&(mfrc522.uid), &key, sector);
-    Serial.println();
 
-    // Halt PICC
-    mfrc522.PICC_HaltA();
-    // Stop encryption on PCD
-    mfrc522.PCD_StopCrypto1();
+
 }
 
-/**
- * Helper routine to dump a byte array as hex values to Serial.
- */
-void dump_byte_array(byte *buffer, byte bufferSize) {
-    for (byte i = 0; i < bufferSize; i++) {
-        Serial.print(buffer[i] < 0x10 ? " 0" : " ");
-        Serial.print(buffer[i], HEX);
-    }
+void printDetail(uint8_t type, int value){
+  switch (type) {
+    case TimeOut:
+      Serial.println(F("Time Out!"));
+      break;
+    case WrongStack:
+      Serial.println(F("Stack Wrong!"));
+      break;
+    case DFPlayerCardInserted:
+      Serial.println(F("Card Inserted!"));
+      break;
+    case DFPlayerCardRemoved:
+      Serial.println(F("Card Removed!"));
+      break;
+    case DFPlayerCardOnline:
+      Serial.println(F("Card Online!"));
+      break;
+    case DFPlayerUSBInserted:
+      Serial.println("USB Inserted!");
+      break;
+    case DFPlayerUSBRemoved:
+      Serial.println("USB Removed!");
+      break;
+    case DFPlayerPlayFinished:
+      Serial.print(F("Number:"));
+      Serial.print(value);
+      Serial.println(F(" Play Finished!"));
+      break;
+    case DFPlayerError:
+      Serial.print(F("DFPlayerError:"));
+      switch (value) {
+        case Busy:
+          Serial.println(F("Card not found"));
+          break;
+        case Sleeping:
+          Serial.println(F("Sleeping"));
+          break;
+        case SerialWrongStack:
+          Serial.println(F("Get Wrong Stack"));
+          break;
+        case CheckSumNotMatch:
+          Serial.println(F("Check Sum Not Match"));
+          break;
+        case FileIndexOut:
+          Serial.println(F("File Index Out of Bound"));
+          break;
+        case FileMismatch:
+          Serial.println(F("Cannot Find File"));
+          break;
+        case Advertise:
+          Serial.println(F("In Advertise"));
+          break;
+        default:
+          break;
+      }
+      break;
+    default:
+      break;
+  }
 }
 
+//song number
+// 1: red 2: orange 3:yellow
+// 4:green 5:blue 6:purple
 void redAction(){
   Serial.print("I am red!");
+  myDFPlayer.play(1);
+  setMotorSpeed(0);
   for(int i=0; i<15; i++){
      motor.on();
      delay(500);
@@ -289,17 +430,22 @@ void redAction(){
   motor.off();
 }
 void blueAction(){
+  myDFPlayer.play(5);
   Serial.print("I am blue!");
+  setMotorSpeed(255);
   for(int i=0; i<90; i++){
     motor.on();
     delay(100);
     motor.off();
     delay(100);
   }
+  setMotorSpeed(0);
   motor.off();
 }
 void yellowAction(){
   Serial.print("I am yellow!");
+  setMotorSpeed(0);
+  myDFPlayer.play(3); 
   for(int i=0; i<30; i++){
     motor.on();
     delay(250);
@@ -312,35 +458,48 @@ void yellowAction(){
 
 void orangeAction(){
   Serial.print("I am orange!");
+  setMotorSpeed(0);
+  myDFPlayer.play(2);
   for(int i=0; i<30; i++){
     motor.on();
-    delay(170);
+    delay(400);
     motor.on(180);
-    delay(230);
+    delay(400);
   }
   motor.off();
 }
 void greenAction(){
+  myDFPlayer.play(4);
+  setMotorSpeed(0);
   Serial.print("I am green!");
   for(int i=0; i<30; i++){
     motor.on();
-    delay(50);
+    delay(220);
     motor.on(180);
-    delay(80);
-    motor.on();
-    delay(100);
+    delay(220);
   }
   motor.off();
 }
 void purpleAction(){
   Serial.print("I am purple!");
+  myDFPlayer.play(6); 
+  setMotorSpeed(0);
   for(int i=0; i<30; i++){
     motor.on();
-    delay(50);
+    delay(120);
     motor.on(180);
-    delay(50);
-    motor.on();
-    delay(400);
+    delay(120);
+    
   }
   motor.off();
+}
+
+void setMotorSpeed(int speed) {
+  if (speed == 0) {
+    digitalWrite(FanMotorPin1, LOW);
+    digitalWrite(FanMotorPin2, LOW);
+  } else {
+    analogWrite(FanMotorPin1, speed);
+    digitalWrite(FanMotorPin2, LOW);
+  }
 }
