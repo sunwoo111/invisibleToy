@@ -39,7 +39,17 @@ products from Adafruit!
 #include <SPI.h>
 #include <Adafruit_PN532.h>
 #include <VibrationMotor.h>
-#define bodyColor  1    // red : 1, blue = 2, yellow = 3
+#include "Arduino.h"
+#include "DFRobotDFPlayerMini.h"
+
+#if (defined(ARDUINO_AVR_UNO) || defined(ARDUINO_AVR_NANO) || defined(ESP8266))   
+#include <SoftwareSerial.h>
+SoftwareSerial softSerial(/*rx =*/2, /*tx =*/3); 
+#define FPSerial softSerial
+#else
+#define FPSerial Serial1
+#endif
+#define bodyColor  2    // red : 1, blue = 2, yellow = 3
 
 // If using the breakout with SPI, define the pins for SPI communication.
 #define PN532_SCK  (13)
@@ -65,16 +75,6 @@ Adafruit_PN532 nfc(PN532_SCK, PN532_MISO, PN532_MOSI, PN532_SS);
 
 VibrationMotor motor(vibrationMotorPin);
 
-#include "Arduino.h"
-#include "DFRobotDFPlayerMini.h"
-
-#if (defined(ARDUINO_AVR_UNO) || defined(ARDUINO_AVR_NANO) || defined(ESP8266))   
-#include <SoftwareSerial.h>
-SoftwareSerial softSerial(/*rx =*/2, /*tx =*/3); 
-#define FPSerial softSerial
-#else
-#define FPSerial Serial1
-#endif
 
 DFRobotDFPlayerMini myDFPlayer;
 void printDetail(uint8_t type, int value);
@@ -125,9 +125,9 @@ void setup(void) {
     Serial.println(F("Unable to begin:"));
     Serial.println(F("1.Please recheck the connection!"));
     Serial.println(F("2.Please insert the SD card!"));
-   /* while(true){
+   while(true){
       delay(0); 
-    }*/
+    }
   }
   Serial.println(F("DFPlayer Mini online."));
 
@@ -169,6 +169,7 @@ byte redBlock[]    = {
   // 'uid' will be populated with the UID, and uidLength will indicate
   // if the uid is 4 bytes (Mifare Classic) or 7 bytes (Mifare Ultralight)
   success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength);
+    Serial.println(lastTag);
   
   if (success) {
     // Display some basic information about the card
@@ -421,7 +422,7 @@ void redAction(){
   Serial.print("I am red!");
   myDFPlayer.play(1);
   setMotorSpeed(0);
-  for(int i=0; i<15; i++){
+  for(int i=0; i<10; i++){
      motor.on();
      delay(500);
      motor.off();
@@ -433,7 +434,7 @@ void blueAction(){
   myDFPlayer.play(5);
   Serial.print("I am blue!");
   setMotorSpeed(255);
-  for(int i=0; i<90; i++){
+  for(int i=0; i<30; i++){
     motor.on();
     delay(100);
     motor.off();
@@ -446,7 +447,7 @@ void yellowAction(){
   Serial.print("I am yellow!");
   setMotorSpeed(0);
   myDFPlayer.play(3); 
-  for(int i=0; i<30; i++){
+  for(int i=0; i<16; i++){
     motor.on();
     delay(250);
      motor.off();
@@ -460,7 +461,7 @@ void orangeAction(){
   Serial.print("I am orange!");
   setMotorSpeed(0);
   myDFPlayer.play(2);
-  for(int i=0; i<30; i++){
+  for(int i=0; i<15; i++){
     motor.on();
     delay(400);
     motor.on(180);
